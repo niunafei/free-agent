@@ -22,6 +22,7 @@ Thumbs.db
 browser-profiles/
 workspace/
 logs/
+log/
 
 # Env
 .env
