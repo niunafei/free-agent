@@ -1,0 +1,34 @@
+# IDE
+.idea/
+.vscode/
+*.iml
+
+# Build
+target/
+build/
+dist/
+*.log
+
+# Node
+node_modules/
+frontend/dist/
+frontend/.vite/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Sensitive - browser profiles & auth (never commit)
+browser-profiles/
+workspace/
+logs/
+
+# Env
+.env
+.env.local
+*.pem
+*.key
+
+# Playwright
+playwright-report/
+test-results/

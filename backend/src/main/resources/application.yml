@@ -1,0 +1,63 @@
+server:
+  port: 8080
+  address: 127.0.0.1
+
+spring:
+  application:
+    name: free-agent
+  datasource:
+    url: jdbc:mysql://127.0.0.1:3306/webmodel_agent?useUnicode=true&characterEncoding=UTF-8&serverTimezone=UTC&allowPublicKeyRetrieval=true&useSSL=false
+    username: root
+    password: root123
+    driver-class-name: com.mysql.cj.jdbc.Driver
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    show-sql: false
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.MySQLDialect
+        format_sql: true
+  data:
+    redis:
+      host: 127.0.0.1
+      port: 6379
+      timeout: 3000ms
+  jackson:
+    default-property-inclusion: non_null
+    serialization:
+      write-dates-as-timestamps: false
+    time-zone: UTC
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+
+webmodel:
+  workspace:
+    dir: ./workspace
+  browser-profiles:
+    dir: ./browser-profiles
+  playwright:
+    # 登录后保持有头浏览器窗口可见，方便调试
+    headless-after-login: false
+
+  agent:
+    max-steps: 50
+    max-model-rounds: 20
+    max-tool-calls: 100
+    timeout-ms: 600000
+    retry-max: 2
+    concurrency: 2
+  context:
+    warn-threshold: 0.70
+    trim-threshold: 0.85
+    default-budget: 32000
+
+logging:
+  level:
+    com.webmodel: INFO
+  file:
+    name: ./logs/free-agent.log
