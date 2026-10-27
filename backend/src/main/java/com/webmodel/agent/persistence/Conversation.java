@@ -16,6 +16,7 @@ public class Conversation {
     private String title;
     private Long selectedModelId;
     private String workingDir;
+    private String authorizedPaths;
     private Integer contextBudget;
     private String contextStrategy;
     private Integer keepRecentTurn;

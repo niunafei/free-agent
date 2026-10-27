@@ -43,7 +43,7 @@
               </el-option>
             </el-select>
             <el-input
-              v-model="workingDir"
+              v-model="workingDirDisplay"
               placeholder="工作目录"
               size="small"
               style="width:200px"
@@ -60,6 +60,19 @@
         </div>
       </div>
     </div>
+
+    <el-dialog v-model="authDialogVisible" title="路径授权确认" width="500px" :close-on-click-modal="false">
+      <div style="line-height: 1.8">
+        <p style="color: #e6a23c; font-weight: 600">⚠️ 工具请求访问工作目录外的路径</p>
+        <p>请求路径：<code style="background: #f5f5f5; padding: 2px 6px; border-radius: 4px">{{ authPendingPath }}</code></p>
+        <p>工作目录：<code style="background: #f5f5f5; padding: 2px 6px; border-radius: 4px">{{ workingDir }}</code></p>
+        <p style="color: #909399; font-size: 13px">授权后，Agent 可以读写该路径下的文件。请确认信任此路径。</p>
+      </div>
+      <template #footer>
+        <el-button @click="authDialogVisible = false">拒绝</el-button>
+        <el-button type="primary" @click="confirmAuthorize">授权并继续</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -81,11 +94,18 @@ const messages = ref<ConversationMessage[]>([])
 const models = ref<ModelProfile[]>([])
 const selectedModelId = ref<number | null>(null)
 const workingDir = ref<string>('')
+const workingDirDisplay = computed(() => {
+  if (!workingDir.value) return ''
+  const parts = workingDir.value.replace(/\\/g, '/').split('/').filter(Boolean)
+  return parts[parts.length - 1] || workingDir.value
+})
 const inputText = ref('')
 const sending = ref(false)
 const thinking = ref(false)
 const thinkingText = ref('思考中...')
 const msgListRef = ref<HTMLElement>()
+const authDialogVisible = ref(false)
+const authPendingPath = ref('')
 
 const MODEL_STATUS_PRIORITY: Record<string, number> = {
   READY: 0, CONNECTING: 1, WAITING_USER: 2, NOT_CONFIGURED: 3, ERROR: 4
@@ -185,6 +205,7 @@ function startPollingMessages(convId: number) {
         messages.value = msgs
         lastMsgCount = msgs.length
         scrollToBottom()
+        checkAuthRequests()
         const lastMsg = msgs[msgs.length - 1]
         if (lastMsg.role === 'MODEL' && (lastMsg.status === 'SUCCESS' || lastMsg.status === 'ERROR')) {
           thinking.value = false
@@ -211,21 +232,15 @@ async function onModelChange() {
 }
 
 async function selectWorkingDir() {
-  try {
-    const w = window as any
-    if (w.showDirectoryPicker) {
-      const handle = await w.showDirectoryPicker({ mode: 'readwrite' })
-      workingDir.value = handle.name
-      ElMessage.success(`已选择工作目录: ${handle.name}`)
-      await saveWorkingDir()
+  const dir = prompt('请输入工作目录绝对路径', workingDir.value || '')
+  if (dir !== null && dir.trim()) {
+    const trimmed = dir.trim()
+    if (!trimmed.startsWith('/')) {
+      ElMessage.warning('请输入绝对路径（以 / 开头）')
       return
     }
-  } catch (e: any) {
-    if (e.name === 'AbortError') return
-  }
-  const dir = prompt('请输入工作目录绝对路径', workingDir.value || '')
-  if (dir !== null) {
-    workingDir.value = dir.trim()
+    workingDir.value = trimmed
+    ElMessage.success(`工作目录: ${trimmed}`)
     await saveWorkingDir()
   }
 }
@@ -235,6 +250,31 @@ async function saveWorkingDir() {
     try {
       await chatApi.renameConversation(conversationId.value, { workingDir: workingDir.value || undefined })
     } catch { /* ignore */ }
+  }
+}
+
+function checkAuthRequests() {
+  for (const msg of messages.value) {
+    if (msg.role === 'TOOL' && msg.content && msg.content.includes('[需要授权]')) {
+      const match = msg.content.match(/路径\s+(\S+)\s+超出工作目录/)
+      if (match && match[1]) {
+        authPendingPath.value = match[1]
+        authDialogVisible.value = true
+        return
+      }
+    }
+  }
+}
+
+async function confirmAuthorize() {
+  if (!conversationId.value || !authPendingPath.value) return
+  try {
+    await chatApi.authorizePath(conversationId.value, authPendingPath.value)
+    ElMessage.success(`已授权路径: ${authPendingPath.value}`)
+    authDialogVisible.value = false
+    ElMessage.info('请重新发送消息让 Agent 继续执行')
+  } catch {
+    ElMessage.error('授权失败')
   }
 }
 

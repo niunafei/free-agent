@@ -15,6 +15,7 @@ import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
+import java.nio.file.Paths;
 import java.util.List;
 import java.util.Map;
 
@@ -119,13 +120,13 @@ public class ChatService {
 
         eventPublisher.publish(snowflakeIdGenerator.nextId(), "USER_MESSAGE", "INFO", "用户发送消息", null);
 
-        processModelReplyAsync(conversationId, c.getSelectedModelId(), c.getWorkingDir(), c.getUserId());
+        processModelReplyAsync(conversationId, c.getSelectedModelId(), c.getWorkingDir(), c.getAuthorizedPaths(), c.getUserId());
 
         return userMsg;
     }
 
     @Async("agentExecutor")
-    public void processModelReplyAsync(Long conversationId, Long modelId, String workingDir, Long userId) {
+    public void processModelReplyAsync(Long conversationId, Long modelId, String workingDir, String authorizedPaths, Long userId) {
         if (modelId == null) {
             saveErrorMsg(conversationId, "未选择模型，请在下方下拉框选择一个已登录的模型。");
             return;
@@ -182,7 +183,8 @@ public class ChatService {
             eventPublisher.publish(snowflakeIdGenerator.nextId(), "MODEL_REPLY", "INFO", "模型回复完成", null);
 
             if (result.success() && result.reply() != null && toolExecutor.hasToolCalls(result.reply())) {
-                executeToolsAndReply(conversationId, result.reply(), workingDir, model, adapter, session);
+                List<String> authPaths = parseAuthorizedPaths(authorizedPaths);
+                executeToolsAndReply(conversationId, result.reply(), workingDir, authPaths, model, adapter, session);
             }
         } catch (Exception e) {
             saveErrorMsg(conversationId, "调用网页模型异常: " + e.getMessage());
@@ -190,7 +192,7 @@ public class ChatService {
     }
 
     private void executeToolsAndReply(Long conversationId, String modelReply, String workingDir,
-                                       ModelProfile model, ModelAdapter adapter,
+                                       List<String> authorizedPaths, ModelProfile model, ModelAdapter adapter,
                                        BrowserSessionManager.BrowserSession session) {
         int maxRounds = 10;
         String currentReply = modelReply;
@@ -205,7 +207,7 @@ public class ChatService {
 
             log.info("[对话{}] 第{}轮工具调用前, 模型回复:\n{}", conversationId, round, currentReply);
 
-            List<ToolExecutor.ToolResult> toolResults = toolExecutor.executeToolsInReply(currentReply, workingDir);
+            List<ToolExecutor.ToolResult> toolResults = toolExecutor.executeToolsInReply(currentReply, workingDir, authorizedPaths);
             for (ToolExecutor.ToolResult tr : toolResults) {
                 log.info("[对话{}] 第{}轮工具调用后, tool={}, success={}, output:\n{}", conversationId, round, tr.toolName(), tr.success(), tr.output());
                 ConversationMessage toolMsg = new ConversationMessage();
@@ -385,6 +387,35 @@ public class ChatService {
         if (workingDir != null) c.setWorkingDir(workingDir);
         c.setUpdatedAt(LocalDateTime.now());
         return conversationRepo.save(c);
+    }
+
+    public Conversation authorizePath(Long id, String path) {
+        Conversation c = getConversation(id);
+        if (path == null || path.isBlank()) {
+            throw new BusinessException(ErrorCode.BAD_REQUEST, "路径不能为空");
+        }
+        String current = c.getAuthorizedPaths();
+        List<String> paths = parseAuthorizedPaths(current);
+        String normalized = Paths.get(path).toAbsolutePath().normalize().toString();
+        if (!paths.contains(normalized)) {
+            paths.add(normalized);
+            c.setAuthorizedPaths(String.join(",", paths));
+            c.setUpdatedAt(LocalDateTime.now());
+            conversationRepo.save(c);
+            log.info("[对话{}] 用户授权路径: {}", id, normalized);
+        }
+        return c;
+    }
+
+    private List<String> parseAuthorizedPaths(String authorizedPaths) {
+        if (authorizedPaths == null || authorizedPaths.isBlank()) {
+            return new java.util.ArrayList<>();
+        }
+        List<String> paths = new java.util.ArrayList<>();
+        for (String p : authorizedPaths.split(",")) {
+            if (!p.isBlank()) paths.add(p.trim());
+        }
+        return paths;
     }
 
     public void deleteConversation(Long id) {

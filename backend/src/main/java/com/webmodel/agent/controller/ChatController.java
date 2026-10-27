@@ -56,7 +56,13 @@ public class ChatController {
         return Result.success(chatService.contextStats(id));
     }
 
+    @PostMapping("/conversations/{id}/authorize")
+    public Result<Conversation> authorizePath(@PathVariable Long id, @RequestBody AuthorizePathRequest req) {
+        return Result.success(chatService.authorizePath(id, req.path()));
+    }
+
     public record CreateConversationRequest(String title, Long modelId, String workingDir) {}
     public record SendMessageRequest(String content, Long modelId) {}
     public record RenameConversationRequest(String title, Long modelId, String workingDir) {}
+    public record AuthorizePathRequest(String path) {}
 }

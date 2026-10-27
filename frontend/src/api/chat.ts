@@ -11,5 +11,7 @@ export const chatApi = {
   messages: (id: number) => get<ConversationMessage[]>(`/chat/conversations/${id}/messages`),
   sendMessage: (id: number, content: string, modelId?: number) =>
     post<ConversationMessage>(`/chat/conversations/${id}/messages`, { content, modelId }),
-  context: (id: number) => get<ContextStats>(`/chat/conversations/${id}/context`)
+  context: (id: number) => get<ContextStats>(`/chat/conversations/${id}/context`),
+  authorizePath: (id: number, path: string) =>
+    post<Conversation>(`/chat/conversations/${id}/authorize`, { path })
 }

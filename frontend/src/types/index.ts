@@ -18,6 +18,7 @@ export interface Conversation {
   title: string | null
   selectedModelId: number | null
   workingDir: string | null
+  authorizedPaths: string | null
   contextBudget: number
   contextStrategy: string
   keepRecentTurn: number
