@@ -27,6 +27,10 @@ public class ChatService {
     private final ModelAdapterFactory adapterFactory;
     private final SnowflakeIdGenerator snowflakeIdGenerator;
     private final ToolExecutor toolExecutor;
+    private final ToolDefinitionRepository toolDefRepo;
+    private final McpServerConfigRepository mcpServerRepo;
+    private final McpCapabilityRepository mcpCapabilityRepo;
+    private final SkillDefinitionRepository skillDefRepo;
 
     public ChatService(ConversationRepository conversationRepo,
                        ConversationMessageRepository messageRepo,
@@ -35,7 +39,11 @@ public class ChatService {
                        BrowserSessionManager browserSessionManager,
                        ModelAdapterFactory adapterFactory,
                        SnowflakeIdGenerator snowflakeIdGenerator,
-                       ToolExecutor toolExecutor) {
+                       ToolExecutor toolExecutor,
+                       ToolDefinitionRepository toolDefRepo,
+                       McpServerConfigRepository mcpServerRepo,
+                       McpCapabilityRepository mcpCapabilityRepo,
+                       SkillDefinitionRepository skillDefRepo) {
         this.conversationRepo = conversationRepo;
         this.messageRepo = messageRepo;
         this.modelRepo = modelRepo;
@@ -44,6 +52,10 @@ public class ChatService {
         this.adapterFactory = adapterFactory;
         this.snowflakeIdGenerator = snowflakeIdGenerator;
         this.toolExecutor = toolExecutor;
+        this.toolDefRepo = toolDefRepo;
+        this.mcpServerRepo = mcpServerRepo;
+        this.mcpCapabilityRepo = mcpCapabilityRepo;
+        this.skillDefRepo = skillDefRepo;
     }
 
     public List<Conversation> listConversations() {
@@ -103,13 +115,13 @@ public class ChatService {
 
         eventPublisher.publish(snowflakeIdGenerator.nextId(), "USER_MESSAGE", "INFO", "用户发送消息", null);
 
-        processModelReplyAsync(conversationId, c.getSelectedModelId(), c.getWorkingDir());
+        processModelReplyAsync(conversationId, c.getSelectedModelId(), c.getWorkingDir(), c.getUserId());
 
         return userMsg;
     }
 
     @Async("agentExecutor")
-    public void processModelReplyAsync(Long conversationId, Long modelId, String workingDir) {
+    public void processModelReplyAsync(Long conversationId, Long modelId, String workingDir, Long userId) {
         if (modelId == null) {
             saveErrorMsg(conversationId, "未选择模型，请在下方下拉框选择一个已登录的模型。");
             return;
@@ -139,7 +151,7 @@ public class ChatService {
         try {
             BrowserSessionManager.BrowserSession session = browserSessionManager.getSession(model.getId());
             List<ConversationMessage> history = messageRepo.findByConversationIdOrderByCreatedAtAsc(conversationId);
-            String contextContent = buildContext(history, workingDir);
+            String contextContent = buildContext(history, workingDir, userId);
             ModelAdapter.SendMessageResult result = adapter.sendMessage(session.page, contextContent);
 
             ConversationMessage modelMsg = new ConversationMessage();
@@ -174,31 +186,47 @@ public class ChatService {
     private void executeToolsAndReply(Long conversationId, String modelReply, String workingDir,
                                        ModelProfile model, ModelAdapter adapter,
                                        BrowserSessionManager.BrowserSession session) {
-        List<ToolExecutor.ToolResult> toolResults = toolExecutor.executeToolsInReply(modelReply, workingDir);
-        for (ToolExecutor.ToolResult tr : toolResults) {
-            ConversationMessage toolMsg = new ConversationMessage();
-            toolMsg.setConversationId(conversationId);
-            toolMsg.setRole("TOOL");
-            toolMsg.setContent("[" + tr.toolName() + "] " + (tr.success() ? "✓" : "✗") + "\n" + tr.output());
-            toolMsg.setCharCount(tr.output().length());
-            toolMsg.setTokenEstimate(estimateTokens(tr.output()));
-            toolMsg.setPinned(false);
-            toolMsg.setSummarized(false);
-            toolMsg.setSourceType(tr.toolName());
-            toolMsg.setStatus(tr.success() ? "SUCCESS" : "ERROR");
-            toolMsg.setCreatedAt(LocalDateTime.now());
-            messageRepo.save(toolMsg);
-        }
+        int maxRounds = 10;
+        String currentReply = modelReply;
 
-        if (!toolResults.isEmpty()) {
+        for (int round = 1; round <= maxRounds; round++) {
+            if (!toolExecutor.hasToolCalls(currentReply)) {
+                break;
+            }
+
+            eventPublisher.publish(snowflakeIdGenerator.nextId(), "TOOL_ROUND", "INFO",
+                    "Agent Loop 第" + round + "轮工具执行", null);
+
+            List<ToolExecutor.ToolResult> toolResults = toolExecutor.executeToolsInReply(currentReply, workingDir);
+            for (ToolExecutor.ToolResult tr : toolResults) {
+                ConversationMessage toolMsg = new ConversationMessage();
+                toolMsg.setConversationId(conversationId);
+                toolMsg.setRole("TOOL");
+                toolMsg.setContent("[" + tr.toolName() + "] " + (tr.success() ? "✓" : "✗") + "\n" + tr.output());
+                toolMsg.setCharCount(tr.output().length());
+                toolMsg.setTokenEstimate(estimateTokens(tr.output()));
+                toolMsg.setPinned(false);
+                toolMsg.setSummarized(false);
+                toolMsg.setSourceType(tr.toolName());
+                toolMsg.setStatus(tr.success() ? "SUCCESS" : "ERROR");
+                toolMsg.setCreatedAt(LocalDateTime.now());
+                messageRepo.save(toolMsg);
+            }
+
+            if (toolResults.isEmpty()) {
+                break;
+            }
+
             try {
-                StringBuilder toolFeedback = new StringBuilder("工具执行结果:\n");
+                StringBuilder toolFeedback = new StringBuilder();
+                toolFeedback.append("[工具执行结果 - 第").append(round).append("轮]\n");
                 for (ToolExecutor.ToolResult tr : toolResults) {
                     toolFeedback.append("[").append(tr.toolName()).append("] ")
-                            .append(tr.success() ? "成功" : "失败").append(": ")
+                            .append(tr.success() ? "成功" : "失败").append(":\n")
                             .append(tr.output()).append("\n\n");
                 }
-                toolFeedback.append("请根据以上工具执行结果继续回复。");
+                toolFeedback.append("以上是工具执行结果。如需继续操作请用<tool_call>格式调用工具,否则请直接给出最终回复。");
+
                 ModelAdapter.SendMessageResult followUp = adapter.sendMessage(session.page, toolFeedback.toString());
                 if (followUp.success() && followUp.reply() != null) {
                     ConversationMessage followUpMsg = new ConversationMessage();
@@ -212,35 +240,130 @@ public class ChatService {
                     followUpMsg.setStatus("SUCCESS");
                     followUpMsg.setCreatedAt(LocalDateTime.now());
                     messageRepo.save(followUpMsg);
+
+                    currentReply = followUp.reply();
+                } else {
+                    saveErrorMsg(conversationId, "第" + round + "轮模型回复失败: " + followUp.detail());
+                    break;
                 }
-            } catch (Exception ignored) {}
+            } catch (Exception e) {
+                saveErrorMsg(conversationId, "第" + round + "轮执行异常: " + e.getMessage());
+                break;
+            }
         }
+
+        eventPublisher.publish(snowflakeIdGenerator.nextId(), "AGENT_DONE", "INFO", "Agent Loop 完成", null);
     }
 
-    private String buildContext(List<ConversationMessage> history, String workingDir) {
+    private String buildContext(List<ConversationMessage> history, String workingDir, Long userId) {
         StringBuilder sb = new StringBuilder();
 
-        sb.append("【系统上下文】\n");
+        sb.append("[系统指令] 你是一个Agent,可以调用工具完成任务。\n");
         if (workingDir != null && !workingDir.isBlank()) {
-            sb.append("当前工作目录: ").append(workingDir).append("\n");
-            sb.append("你可以使用以下工具操作文件系统:\n");
-            sb.append("- 执行命令: ```bash\\n<命令>\\n```\n");
-            sb.append("- 读取文件: ```file:read <文件路径>\\n```\n");
-            sb.append("- 写入文件: ```file:write <文件路径>\\n<内容>\\n```\n");
-            sb.append("所有文件操作均在工作目录下执行。如需查看当前目录，请执行 ```bash\\npwd\\n```。\n");
-        } else {
-            sb.append("未设置工作目录。如需操作文件，请先设置工作目录。\n");
+            sb.append("工作目录: ").append(workingDir).append("\n");
         }
-        sb.append("\n【对话历史】\n");
 
-        int start = Math.max(0, history.size() - 10);
+        sb.append("\n【工具调用协议】\n");
+        sb.append("当你需要执行命令或操作文件时,输出以下格式(可输出多个,按顺序执行):\n");
+        sb.append("<tool_call>\n");
+        sb.append("{\"tool\": \"bash\", \"args\": {\"command\": \"ls -la\"}}\n");
+        sb.append("</tool_call>\n");
+        sb.append("<tool_call>\n");
+        sb.append("{\"tool\": \"file.read\", \"args\": {\"path\": \"src/main.java\"}}\n");
+        sb.append("</tool_call>\n");
+        sb.append("<tool_call>\n");
+        sb.append("{\"tool\": \"file.write\", \"args\": {\"path\": \"output.txt\", \"content\": \"内容\"}}\n");
+        sb.append("</tool_call>\n");
+        sb.append("tool字段: bash/file.read/file.write/file.list/file.search\n");
+        sb.append("args字段: bash用command, file.read用path, file.write用path+content\n\n");
+
+        sb.append("【工具结果格式】\n");
+        sb.append("工具执行后,你会收到以下格式的结果:\n");
+        sb.append("<tool_result tool=\"bash\" success=\"true\">\n退出码: 0\n输出内容\n</tool_result>\n");
+        sb.append("收到结果后,你可以继续调用工具或给出最终回复。\n\n");
+
+        sb.append(buildToolSummary());
+        sb.append(buildMcpSummary(userId));
+        sb.append(buildSkillSummary(userId));
+        sb.append("\n");
+
+        int start = Math.max(0, history.size() - 6);
+        if (start > 0) {
+            sb.append("(更早历史省略)\n");
+        }
         for (int i = start; i < history.size(); i++) {
             ConversationMessage m = history.get(i);
             String role = "USER".equals(m.getRole()) ? "用户" : "MODEL".equals(m.getRole()) ? "模型" : "工具";
-            sb.append(role).append(": ").append(m.getContent()).append("\n\n");
+            String content = m.getContent();
+            if (content != null && content.length() > 500) {
+                content = content.substring(0, 500) + "...(省略)";
+            }
+            sb.append(role).append(": ").append(content).append("\n\n");
         }
         return sb.toString();
     }
+
+    private String buildToolSummary() {
+        StringBuilder sb = new StringBuilder();
+        sb.append("工具: ");
+        sb.append("bash(执行命令), file:read(读文件), file:write(写文件)");
+        try {
+            List<ToolDefinition> tools = toolDefRepo.findByEnabledTrue();
+            if (tools != null && !tools.isEmpty()) {
+                List<String> names = new java.util.ArrayList<>();
+                for (ToolDefinition t : tools) {
+                    String id = t.getToolId() != null ? t.getToolId() : t.getName();
+                    if (!id.equals("bash") && !id.equals("file.read") && !id.equals("file.write")) {
+                        names.add(id + "(" + (t.getDescription() != null ? t.getDescription().substring(0, Math.min(20, t.getDescription().length())) : "") + ")");
+                    }
+                }
+                if (!names.isEmpty()) {
+                    sb.append(", ").append(String.join(", ", names));
+                }
+            }
+        } catch (Exception ignored) {}
+        sb.append(".\n");
+        return sb.toString();
+    }
+
+    private String buildMcpSummary(Long userId) {
+        StringBuilder sb = new StringBuilder();
+        try {
+            List<McpServerConfig> servers = mcpServerRepo.findByUserIdOrUserIdIsNull(userId);
+            if (servers != null && !servers.isEmpty()) {
+                List<String> connected = new java.util.ArrayList<>();
+                for (McpServerConfig s : servers) {
+                    if (Boolean.TRUE.equals(s.getEnabled()) && "CONNECTED".equals(s.getConnectionStatus())) {
+                        connected.add(s.getName());
+                    }
+                }
+                if (!connected.isEmpty()) {
+                    sb.append("MCP: ").append(String.join(", ", connected)).append(".\n");
+                }
+            }
+        } catch (Exception ignored) {}
+        return sb.toString();
+    }
+
+    private String buildSkillSummary(Long userId) {
+        StringBuilder sb = new StringBuilder();
+        try {
+            List<SkillDefinition> skills = skillDefRepo.findByUserIdOrUserIdIsNull(userId);
+            if (skills != null && !skills.isEmpty()) {
+                List<String> names = new java.util.ArrayList<>();
+                for (SkillDefinition s : skills) {
+                    if (Boolean.TRUE.equals(s.getEnabled())) {
+                        names.add(s.getName() != null ? s.getName() : s.getSkillId());
+                    }
+                }
+                if (!names.isEmpty()) {
+                    sb.append("技能: ").append(String.join(", ", names)).append(".\n");
+                }
+            }
+        } catch (Exception ignored) {}
+        return sb.toString();
+    }
+
 
 
     public Conversation renameConversation(Long id, String title, Long modelId, String workingDir) {

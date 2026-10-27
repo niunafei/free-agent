@@ -35,6 +35,44 @@ public final class LoginDetector {
         try {
             String url = page.url().toLowerCase();
 
+            Locator input = page.locator(INPUT_SELECTOR).first();
+            boolean inputVisible = input.isVisible(new Locator.IsVisibleOptions().setTimeout(2000));
+
+            if (inputVisible) {
+                boolean inputEnabled = true;
+                try {
+                    inputEnabled = (boolean) input.evaluate(
+                            "el => !el.disabled && !el.getAttribute('aria-disabled')"
+                    );
+                } catch (Exception ignored) {}
+
+                if (inputEnabled) {
+                    Locator userIndicator = page.locator(USER_INDICATOR_SELECTOR).first();
+                    boolean hasUserIndicator = userIndicator.isVisible(new Locator.IsVisibleOptions().setTimeout(1000));
+
+                    if (hasUserIndicator) {
+                        return new ModelAdapter.LoginCheckResult(true, "检测到用户头像/菜单 + 可交互输入框，已登录");
+                    }
+
+                    boolean hasLoginKeyword = false;
+                    for (String keyword : LOGIN_URL_KEYWORDS) {
+                        if (url.contains(keyword)) {
+                            hasLoginKeyword = true;
+                            break;
+                        }
+                    }
+
+                    Locator loginBtn = page.locator(LOGIN_BUTTON_SELECTOR).first();
+                    boolean hasLoginButton = loginBtn.isVisible(new Locator.IsVisibleOptions().setTimeout(1000));
+
+                    if (!hasLoginKeyword && !hasLoginButton) {
+                        return new ModelAdapter.LoginCheckResult(true, "检测到可交互聊天输入框且无登录信号，已登录");
+                    }
+
+                    return new ModelAdapter.LoginCheckResult(true, "检测到可交互输入框(页面可能仍在登录过渡)，判定已登录");
+                }
+            }
+
             for (String keyword : LOGIN_URL_KEYWORDS) {
                 if (url.contains(keyword)) {
                     return new ModelAdapter.LoginCheckResult(false, "URL 含登录关键词: " + keyword);
@@ -46,26 +84,11 @@ public final class LoginDetector {
                 return new ModelAdapter.LoginCheckResult(false, "页面存在登录按钮");
             }
 
-            Locator input = page.locator(INPUT_SELECTOR).first();
-            if (!input.isVisible(new Locator.IsVisibleOptions().setTimeout(2000))) {
+            if (!inputVisible) {
                 return new ModelAdapter.LoginCheckResult(false, "未检测到聊天输入框");
             }
 
-            boolean inputEnabled = (boolean) input.evaluate(
-                    "el => !el.disabled && !el.getAttribute('aria-disabled')"
-            );
-            if (!inputEnabled) {
-                return new ModelAdapter.LoginCheckResult(false, "输入框不可交互");
-            }
-
-            Locator userIndicator = page.locator(USER_INDICATOR_SELECTOR).first();
-            boolean hasUserIndicator = userIndicator.isVisible(new Locator.IsVisibleOptions().setTimeout(1000));
-
-            if (hasUserIndicator) {
-                return new ModelAdapter.LoginCheckResult(true, "检测到用户头像/菜单 + 可交互输入框，已登录");
-            }
-
-            return new ModelAdapter.LoginCheckResult(true, "检测到可交互聊天输入框，已登录");
+            return new ModelAdapter.LoginCheckResult(false, "输入框不可交互");
         } catch (Exception e) {
             return new ModelAdapter.LoginCheckResult(false, "检测异常: " + e.getMessage());
         }

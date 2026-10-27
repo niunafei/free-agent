@@ -22,7 +22,11 @@ public class McpService {
     }
 
     public List<McpServerConfig> listServers() {
-        return serverRepo.findByUserId(UserContext.getUserId());
+        Long userId = UserContext.getUserId();
+        if (UserContext.isAdmin()) {
+            return serverRepo.findByUserIdOrUserIdIsNull(userId);
+        }
+        return serverRepo.findByUserId(userId);
     }
 
     public McpServerConfig create(McpController.McpCreateRequest req) {

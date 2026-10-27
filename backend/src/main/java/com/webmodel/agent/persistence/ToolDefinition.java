@@ -22,6 +22,7 @@ public class ToolDefinition {
     private String outputSchemaJson;
     private String riskLevel;
     private Boolean enabled;
+    private Boolean isSystem;
     private Long timeoutMs;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;

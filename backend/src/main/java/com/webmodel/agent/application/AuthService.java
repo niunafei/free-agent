@@ -30,10 +30,12 @@ public class AuthService {
         u.setUsername(username);
         u.setPasswordHash(hash(password));
         u.setDisplayName(displayName != null ? displayName : username);
+        u.setRole("USER");
         u.setCreatedAt(LocalDateTime.now());
         userRepository.save(u);
-        String token = jwtUtil.generate(u.getId(), u.getUsername());
-        return Map.of("token", token, "userId", u.getId(), "username", u.getUsername(), "displayName", u.getDisplayName());
+        String token = jwtUtil.generate(u.getId(), u.getUsername(), u.getRole());
+        return Map.of("token", token, "userId", u.getId(), "username", u.getUsername(),
+                "displayName", u.getDisplayName(), "role", u.getRole());
     }
 
     public Map<String, Object> login(String username, String password) {
@@ -42,14 +44,18 @@ public class AuthService {
         if (!u.getPasswordHash().equals(hash(password))) {
             throw new BusinessException(ErrorCode.UNAUTHORIZED, "密码错误");
         }
-        String token = jwtUtil.generate(u.getId(), u.getUsername());
-        return Map.of("token", token, "userId", u.getId(), "username", u.getUsername(), "displayName", u.getDisplayName());
+        String role = u.getRole() != null ? u.getRole() : "USER";
+        String token = jwtUtil.generate(u.getId(), u.getUsername(), role);
+        return Map.of("token", token, "userId", u.getId(), "username", u.getUsername(),
+                "displayName", u.getDisplayName(), "role", role);
     }
 
     public Map<String, Object> me(Long userId) {
         User u = userRepository.findById(userId)
                 .orElseThrow(() -> new BusinessException(ErrorCode.UNAUTHORIZED));
+        String role = u.getRole() != null ? u.getRole() : "USER";
         return Map.of("userId", u.getId(), "username", u.getUsername(), "displayName", u.getDisplayName(),
+                "role", role,
                 "email", u.getEmail() != null ? u.getEmail() : "", "phone", u.getPhone() != null ? u.getPhone() : "");
     }
 

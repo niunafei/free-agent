@@ -6,4 +6,6 @@ import java.util.List;
 
 public interface McpServerConfigRepository extends JpaRepository<McpServerConfig, Long> {
     List<McpServerConfig> findByUserId(Long userId);
+    List<McpServerConfig> findByUserIdIsNull();
+    List<McpServerConfig> findByUserIdOrUserIdIsNull(Long userId);
 }

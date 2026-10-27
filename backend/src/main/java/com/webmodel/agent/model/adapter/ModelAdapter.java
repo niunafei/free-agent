@@ -42,12 +42,43 @@ public interface ModelAdapter {
 
             Thread.sleep(2000);
 
-            for (int i = 0; i < 30; i++) {
+            for (int i = 0; i < 60; i++) {
                 int currMsgCount = page.locator("[class*='message'], [class*='chat-item'], [class*='conversation'] > div").count();
                 if (currMsgCount > prevMsgCount) {
-                    Thread.sleep(1500);
                     break;
                 }
+                Thread.sleep(1000);
+            }
+
+            Thread.sleep(3000);
+            String prevText = "";
+            for (int i = 0; i < 30; i++) {
+                try {
+                    Locator stopBtn = page.locator(
+                        "button[class*='stop'], button[class*='pause'], button[aria-label*='stop'], " +
+                        "button[disabled], [class*='generating'], [class*='loading'], " +
+                        "[class*='typing'], [class*='streaming']"
+                    ).first();
+                    if (!stopBtn.isVisible(new Locator.IsVisibleOptions().setTimeout(500))) {
+                        Thread.sleep(1500);
+                        break;
+                    }
+                } catch (Exception ignored) {}
+
+                try {
+                    Locator anyMsg = page.locator(
+                        "[class*='assistant'], [class*='model'], [class*='bot'], " +
+                        "[class*='response'], [class*='reply'], [class*='answer']"
+                    ).last();
+                    if (anyMsg.isVisible(new Locator.IsVisibleOptions().setTimeout(500))) {
+                        String currText = (String) anyMsg.evaluate("el => el.innerText || el.textContent || ''");
+                        if (currText != null && currText.equals(prevText) && currText.length() > 20) {
+                            Thread.sleep(1000);
+                            break;
+                        }
+                        prevText = currText != null ? currText : "";
+                    }
+                } catch (Exception ignored) {}
                 Thread.sleep(1000);
             }
 

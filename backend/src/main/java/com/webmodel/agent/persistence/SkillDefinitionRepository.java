@@ -6,4 +6,6 @@ import java.util.List;
 
 public interface SkillDefinitionRepository extends JpaRepository<SkillDefinition, Long> {
     List<SkillDefinition> findByUserId(Long userId);
+    List<SkillDefinition> findByUserIdIsNull();
+    List<SkillDefinition> findByUserIdOrUserIdIsNull(Long userId);
 }

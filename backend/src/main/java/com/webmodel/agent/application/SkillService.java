@@ -18,7 +18,11 @@ public class SkillService {
     }
 
     public List<SkillDefinition> listAll() {
-        return repository.findByUserId(UserContext.getUserId());
+        Long userId = UserContext.getUserId();
+        if (UserContext.isAdmin()) {
+            return repository.findByUserIdOrUserIdIsNull(userId);
+        }
+        return repository.findByUserId(userId);
     }
 
     public SkillDefinition importSkill(SkillsController.SkillImportRequest req) {

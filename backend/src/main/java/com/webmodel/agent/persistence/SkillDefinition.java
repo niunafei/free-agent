@@ -20,6 +20,7 @@ public class SkillDefinition {
     private String sourcePath;
     private String contentHash;
     private Boolean enabled;
+    private Boolean isSystem;
     private String validationStatus;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;

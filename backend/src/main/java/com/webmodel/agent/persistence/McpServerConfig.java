@@ -19,6 +19,7 @@ public class McpServerConfig {
     private Boolean enabled;
     private String connectionStatus;
     private String trustLevel;
+    private Boolean isSystem;
     private LocalDateTime lastCheckedAt;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
