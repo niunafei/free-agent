@@ -9,6 +9,8 @@ import com.webmodel.agent.model.adapter.ModelAdapter;
 import com.webmodel.agent.model.adapter.ModelAdapterFactory;
 import com.webmodel.agent.persistence.*;
 import com.webmodel.agent.security.UserContext;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 
@@ -18,6 +20,8 @@ import java.util.Map;
 
 @Service
 public class ChatService {
+
+    private static final Logger log = LoggerFactory.getLogger(ChatService.class);
 
     private final ConversationRepository conversationRepo;
     private final ConversationMessageRepository messageRepo;
@@ -152,7 +156,9 @@ public class ChatService {
             BrowserSessionManager.BrowserSession session = browserSessionManager.getSession(model.getId());
             List<ConversationMessage> history = messageRepo.findByConversationIdOrderByCreatedAtAsc(conversationId);
             String contextContent = buildContext(history, workingDir, userId);
+            log.info("[对话{}] 发送给模型, 内容长度={}, 内容:\n{}", conversationId, contextContent.length(), contextContent);
             ModelAdapter.SendMessageResult result = adapter.sendMessage(session.page, contextContent);
+            log.info("[对话{}] 模型回复, success={}, reply:\n{}", conversationId, result.success(), result.reply());
 
             ConversationMessage modelMsg = new ConversationMessage();
             modelMsg.setConversationId(conversationId);
@@ -197,8 +203,11 @@ public class ChatService {
             eventPublisher.publish(snowflakeIdGenerator.nextId(), "TOOL_ROUND", "INFO",
                     "Agent Loop 第" + round + "轮工具执行", null);
 
+            log.info("[对话{}] 第{}轮工具调用前, 模型回复:\n{}", conversationId, round, currentReply);
+
             List<ToolExecutor.ToolResult> toolResults = toolExecutor.executeToolsInReply(currentReply, workingDir);
             for (ToolExecutor.ToolResult tr : toolResults) {
+                log.info("[对话{}] 第{}轮工具调用后, tool={}, success={}, output:\n{}", conversationId, round, tr.toolName(), tr.success(), tr.output());
                 ConversationMessage toolMsg = new ConversationMessage();
                 toolMsg.setConversationId(conversationId);
                 toolMsg.setRole("TOOL");
@@ -227,7 +236,10 @@ public class ChatService {
                 }
                 toolFeedback.append("以上是工具执行结果。如需继续操作请用<tool_call>格式调用工具,否则请直接给出最终回复。");
 
-                ModelAdapter.SendMessageResult followUp = adapter.sendMessage(session.page, toolFeedback.toString());
+                String feedbackStr = toolFeedback.toString();
+                log.info("[对话{}] 第{}轮发送工具结果给模型, 内容长度={}, 内容:\n{}", conversationId, round, feedbackStr.length(), feedbackStr);
+                ModelAdapter.SendMessageResult followUp = adapter.sendMessage(session.page, feedbackStr);
+                log.info("[对话{}] 第{}轮模型回复, success={}, reply:\n{}", conversationId, round, followUp.success(), followUp.reply());
                 if (followUp.success() && followUp.reply() != null) {
                     ConversationMessage followUpMsg = new ConversationMessage();
                     followUpMsg.setConversationId(conversationId);
