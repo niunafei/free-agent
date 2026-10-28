@@ -53,8 +53,9 @@ public class ToolExecutor {
         boolean foundStructured = false;
         while (toolCallMatcher.find()) {
             foundStructured = true;
-            String json = toolCallMatcher.group(1).trim();
-            ToolResult tr = executeStructuredCall(json, dir, authorizedPaths);
+            String block = toolCallMatcher.group(1).trim();
+            ToolResult tr = executeXmlToolCall(block, dir, authorizedPaths);
+            if (tr == null) tr = executeStructuredCall(block, dir, authorizedPaths);
             if (tr != null) results.add(tr);
         }
 
@@ -90,6 +91,47 @@ public class ToolExecutor {
                 || reply.contains("```file:write");
     }
 
+    private ToolResult executeXmlToolCall(String block, String workingDir, List<String> authorizedPaths) {
+        String tool = extractTag(block, "tool");
+        if (tool == null || tool.isBlank()) return null;
+
+        return switch (tool) {
+            case "bash" -> executeBash(
+                    extractTagOrEmpty(block, "command"), workingDir, authorizedPaths);
+            case "file.read", "file:read" -> readFile(
+                    extractTagOrEmpty(block, "path"), workingDir, authorizedPaths);
+            case "file.write", "file:write" -> writeFile(
+                    extractTagOrEmpty(block, "path"),
+                    extractTagOrEmpty(block, "content"),
+                    workingDir, authorizedPaths);
+            case "file.list", "file:list" -> executeBash(
+                    "ls -la" + (extractTag(block, "path") != null ? " " + extractTag(block, "path") : ""),
+                    workingDir, authorizedPaths);
+            case "file.search", "file:search" -> executeBash(
+                    "grep -rn \"" + extractTagOrEmpty(block, "pattern") + "\""
+                            + (extractTag(block, "path") != null ? " " + extractTag(block, "path") : " ."),
+                    workingDir, authorizedPaths);
+            default -> new ToolResult(false, "未知工具: " + tool, tool);
+        };
+    }
+
+    private String extractTag(String text, String tag) {
+        Pattern cdataPattern = Pattern.compile(
+                "<" + tag + ">\\s*<!\\[CDATA\\[(.*?)\\]\\]>\\s*</" + tag + ">",
+                Pattern.DOTALL);
+        Matcher m = cdataPattern.matcher(text);
+        if (m.find()) return m.group(1);
+        Pattern tagPattern = Pattern.compile("<" + tag + ">(.*?)</" + tag + ">", Pattern.DOTALL);
+        m = tagPattern.matcher(text);
+        if (m.find()) return m.group(1).trim();
+        return null;
+    }
+
+    private String extractTagOrEmpty(String text, String tag) {
+        String val = extractTag(text, tag);
+        return val != null ? val : "";
+    }
+
     private ToolResult executeStructuredCall(String json, String workingDir, List<String> authorizedPaths) {
         try {
             JsonNode node = objectMapper.readTree(json);
@@ -117,7 +159,6 @@ public class ToolExecutor {
 
     private ToolResult executeBash(String script, String workingDir, List<String> authorizedPaths) {
         try {
-            Path wdPath = Paths.get(workingDir).toAbsolutePath().normalize();
             log.info("[bash] 执行命令, workingDir={}, script:\n{}", workingDir, script);
             ProcessBuilder pb = new ProcessBuilder("bash", "-c", script);
             pb.directory(new File(workingDir));

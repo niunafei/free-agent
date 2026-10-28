@@ -31,7 +31,7 @@
           :rows="3"
           placeholder="输入消息，Enter 发送，Shift+Enter 换行"
           resize="none"
-          @keydown.enter.exact.prevent="send"
+          @keydown="handleKeydown"
           class="msg-input"
         />
         <div class="input-toolbar">
@@ -83,7 +83,8 @@ import { ElMessage } from 'element-plus'
 import { Promotion, FolderOpened } from '@element-plus/icons-vue'
 import { chatApi } from '@/api/chat'
 import { modelsApi } from '@/api/models'
-import type { Conversation, ConversationMessage, ModelProfile } from '@/types'
+import { createTaskEventSource } from '@/api/sse'
+import type { Conversation, ConversationMessage, ModelProfile, TaskEvent } from '@/types'
 import StatusTag from '@/components/StatusTag.vue'
 
 const route = useRoute()
@@ -127,10 +128,14 @@ async function loadModels() {
   } catch { /* ignore */ }
 }
 
+const knownMessageIds = ref<Set<number>>(new Set())
+
 async function loadConversation() {
   if (!conversationId.value) return
   try {
-    messages.value = await chatApi.messages(conversationId.value)
+    const msgs = await chatApi.messages(conversationId.value)
+    messages.value = msgs
+    knownMessageIds.value = new Set(msgs.map(m => m.id))
     const convs = await chatApi.conversations()
     currentConversation.value = convs.find(c => c.id === conversationId.value) || null
     const savedModelId = currentConversation.value?.selectedModelId ?? null
@@ -143,6 +148,101 @@ async function loadConversation() {
     workingDir.value = currentConversation.value?.workingDir ?? ''
     scrollToBottom()
   } catch { /* ignore */ }
+}
+
+let eventSource: EventSource | null = null
+const messageQueue: ConversationMessage[] = []
+let isProcessingQueue = false
+
+function startSSE(convId: number) {
+  stopSSE()
+  eventSource = createTaskEventSource(convId, null, (event: TaskEvent) => {
+    handleSSEEvent(convId, event)
+  }, () => {
+    thinking.value = false
+    stopSSE()
+  })
+}
+
+function stopSSE() {
+  if (eventSource) {
+    eventSource.close()
+    eventSource = null
+  }
+}
+
+async function handleSSEEvent(convId: number, event: TaskEvent) {
+  if (event.eventType === 'NEW_MESSAGE') {
+    await fetchNewMessages(convId)
+  } else if (event.eventType === 'AGENT_DONE') {
+    await fetchNewMessages(convId)
+    thinking.value = false
+    stopSSE()
+  }
+}
+
+async function fetchNewMessages(convId: number) {
+  try {
+    const msgs = await chatApi.messages(convId)
+    const newMsgs = msgs.filter(m => !knownMessageIds.value.has(m.id))
+    for (const msg of newMsgs) {
+      knownMessageIds.value.add(msg.id)
+      messageQueue.push(msg)
+    }
+    processQueue()
+  } catch { /* ignore */ }
+}
+
+async function processQueue() {
+  if (isProcessingQueue) return
+  isProcessingQueue = true
+  while (messageQueue.length > 0) {
+    const msg = messageQueue.shift()!
+    if (msg.role === 'MODEL' && msg.status === 'SUCCESS' && msg.content) {
+      await typewriterMessage(msg)
+    } else {
+      messages.value.push(msg)
+      scrollToBottom()
+      checkAuthRequests()
+    }
+  }
+  isProcessingQueue = false
+}
+
+async function typewriterMessage(msg: ConversationMessage) {
+  const fullText = msg.content || ''
+  if (!fullText) {
+    messages.value.push(msg)
+    scrollToBottom()
+    return
+  }
+
+  const tempMsg: any = { ...msg, content: '' }
+  messages.value.push(tempMsg)
+  scrollToBottom()
+
+  const totalChars = fullText.length
+  let delay = 20
+  let chunkSize = 1
+  if (totalChars > 1000) { delay = 8; chunkSize = 5 }
+  else if (totalChars > 500) { delay = 10; chunkSize = 3 }
+  else if (totalChars > 200) { delay = 15; chunkSize = 2 }
+
+  let i = 0
+  while (i < totalChars) {
+    i = Math.min(i + chunkSize, totalChars)
+    tempMsg.content = fullText.substring(0, i)
+    scrollToBottom()
+    await new Promise(resolve => setTimeout(resolve, delay))
+  }
+  checkAuthRequests()
+}
+
+function handleKeydown(e: KeyboardEvent) {
+  if (e.key === 'Enter' && !e.shiftKey && !e.ctrlKey && !e.altKey && !e.metaKey) {
+    e.preventDefault()
+    send()
+  }
 }
 
 async function send() {
@@ -175,49 +275,34 @@ async function send() {
       return
     }
   }
-  sending.value = true
+
+  const sentText = inputText.value
+  const tempUserMsg: any = {
+    id: -Date.now(),
+    conversationId: convId,
+    role: 'USER',
+    content: sentText,
+    charCount: sentText.length,
+    status: 'SUCCESS',
+    createdAt: new Date().toISOString()
+  }
+  messages.value.push(tempUserMsg)
+  knownMessageIds.value.add(tempUserMsg.id)
+  inputText.value = ''
   thinking.value = true
   thinkingText.value = '思考中...'
   scrollToBottom()
+
+  sending.value = true
   try {
-    await chatApi.sendMessage(convId!, inputText.value, selectedModelId.value ?? undefined)
-    inputText.value = ''
-    await loadConversation()
-    startPollingMessages(convId!)
-  } catch (e: any) {
-    thinkingText.value = '连接已断开，请检查后端服务是否正常运行'
-    setTimeout(() => { thinking.value = false }, 3000)
+    await chatApi.sendMessage(convId, sentText, selectedModelId.value ?? undefined)
+    startSSE(convId)
+  } catch {
+    thinking.value = false
+    ElMessage.error('发送失败，请检查后端服务是否正常运行')
   } finally {
     sending.value = false
   }
-}
-
-let pollMsgTimer: ReturnType<typeof setInterval> | null = null
-let lastMsgCount = 0
-
-function startPollingMessages(convId: number) {
-  lastMsgCount = messages.value.length
-  if (pollMsgTimer) clearInterval(pollMsgTimer)
-  pollMsgTimer = setInterval(async () => {
-    try {
-      const msgs = await chatApi.messages(convId)
-      if (msgs.length > lastMsgCount) {
-        messages.value = msgs
-        lastMsgCount = msgs.length
-        scrollToBottom()
-        checkAuthRequests()
-        const lastMsg = msgs[msgs.length - 1]
-        if (lastMsg.role === 'MODEL' && (lastMsg.status === 'SUCCESS' || lastMsg.status === 'ERROR')) {
-          thinking.value = false
-          if (pollMsgTimer) { clearInterval(pollMsgTimer); pollMsgTimer = null }
-        }
-      }
-    } catch {
-      thinking.value = false
-      thinkingText.value = '连接已断开，请检查后端服务是否正常运行'
-      if (pollMsgTimer) { clearInterval(pollMsgTimer); pollMsgTimer = null }
-    }
-  }, 2000)
 }
 
 async function onModelChange() {
@@ -295,9 +380,13 @@ onMounted(() => {
 })
 onUnmounted(() => {
   window.removeEventListener('models-updated', loadModels)
-  if (pollMsgTimer) { clearInterval(pollMsgTimer); pollMsgTimer = null }
+  stopSSE()
 })
-watch(conversationId, loadConversation)
+watch(conversationId, () => {
+  stopSSE()
+  thinking.value = false
+  loadConversation()
+})
 </script>
 
 <style scoped>

@@ -118,7 +118,8 @@ public class ChatService {
         c.setUpdatedAt(LocalDateTime.now());
         conversationRepo.save(c);
 
-        eventPublisher.publish(snowflakeIdGenerator.nextId(), "USER_MESSAGE", "INFO", "用户发送消息", null);
+        eventPublisher.publish(conversationId, "USER_MESSAGE", "INFO", "用户发送消息", null);
+        eventPublisher.publish(conversationId, "NEW_MESSAGE", "INFO", "新消息", null);
 
         processModelReplyAsync(conversationId, c.getSelectedModelId(), c.getWorkingDir(), c.getAuthorizedPaths(), c.getUserId());
 
@@ -180,11 +181,14 @@ public class ChatService {
             modelMsg.setCreatedAt(LocalDateTime.now());
             messageRepo.save(modelMsg);
 
-            eventPublisher.publish(snowflakeIdGenerator.nextId(), "MODEL_REPLY", "INFO", "模型回复完成", null);
+            eventPublisher.publish(conversationId, "MODEL_REPLY", "INFO", "模型回复完成", null);
+            eventPublisher.publish(conversationId, "NEW_MESSAGE", "INFO", "新消息", null);
 
             if (result.success() && result.reply() != null && toolExecutor.hasToolCalls(result.reply())) {
                 List<String> authPaths = parseAuthorizedPaths(authorizedPaths);
                 executeToolsAndReply(conversationId, result.reply(), workingDir, authPaths, model, adapter, session);
+            } else {
+                eventPublisher.publish(conversationId, "AGENT_DONE", "INFO", "Agent Loop 完成", null);
             }
         } catch (Exception e) {
             saveErrorMsg(conversationId, "调用网页模型异常: " + e.getMessage());
@@ -202,7 +206,7 @@ public class ChatService {
                 break;
             }
 
-            eventPublisher.publish(snowflakeIdGenerator.nextId(), "TOOL_ROUND", "INFO",
+            eventPublisher.publish(conversationId, "TOOL_ROUND", "INFO",
                     "Agent Loop 第" + round + "轮工具执行", null);
 
             log.info("[对话{}] 第{}轮工具调用前, 模型回复:\n{}", conversationId, round, currentReply);
@@ -222,6 +226,10 @@ public class ChatService {
                 toolMsg.setStatus(tr.success() ? "SUCCESS" : "ERROR");
                 toolMsg.setCreatedAt(LocalDateTime.now());
                 messageRepo.save(toolMsg);
+            }
+
+            if (!toolResults.isEmpty()) {
+                eventPublisher.publish(conversationId, "NEW_MESSAGE", "INFO", "新消息", null);
             }
 
             if (toolResults.isEmpty()) {
@@ -255,6 +263,8 @@ public class ChatService {
                     followUpMsg.setCreatedAt(LocalDateTime.now());
                     messageRepo.save(followUpMsg);
 
+                    eventPublisher.publish(conversationId, "NEW_MESSAGE", "INFO", "新消息", null);
+
                     currentReply = followUp.reply();
                 } else {
                     saveErrorMsg(conversationId, "第" + round + "轮模型回复失败: " + followUp.detail());
@@ -266,7 +276,7 @@ public class ChatService {
             }
         }
 
-        eventPublisher.publish(snowflakeIdGenerator.nextId(), "AGENT_DONE", "INFO", "Agent Loop 完成", null);
+        eventPublisher.publish(conversationId, "AGENT_DONE", "INFO", "Agent Loop 完成", null);
     }
 
     private String buildContext(List<ConversationMessage> history, String workingDir, Long userId) {
@@ -450,6 +460,8 @@ public class ChatService {
         msg.setStatus("ERROR");
         msg.setCreatedAt(LocalDateTime.now());
         messageRepo.save(msg);
+        eventPublisher.publish(conversationId, "NEW_MESSAGE", "INFO", "新消息", null);
+        eventPublisher.publish(conversationId, "AGENT_DONE", "INFO", "Agent Loop 完成(错误)", null);
         return msg;
     }
 
