@@ -5,10 +5,10 @@ server:
 spring:
   application:
     name: free-agent
-  datasource:
-    url: jdbc:mysql://127.0.0.1:3306/webmodel_agent?useUnicode=true&characterEncoding=UTF-8&serverTimezone=UTC&allowPublicKeyRetrieval=true&useSSL=false
-    username: root
-    password: 123456
+    datasource:
+    url: jdbc:mysql://127.0.0.1:3306/${MYSQL_DATABASE:webmodel_agent}?useUnicode=true&characterEncoding=UTF-8&serverTimezone=UTC&allowPublicKeyRetrieval=true&useSSL=false
+    username: ${MYSQL_USERNAME:root}
+    password: ${MYSQL_ROOT_PASSWORD:?Please set MYSQL_ROOT_PASSWORD}
     driver-class-name: com.mysql.cj.jdbc.Driver
   jpa:
     hibernate:

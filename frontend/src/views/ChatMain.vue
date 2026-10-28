@@ -204,6 +204,17 @@ async function processQueue() {
       messages.value.push(msg)
       scrollToBottom()
       checkAuthRequests()
+      if (msg.status === 'ERROR' && msg.content && (
+        msg.content.includes('浏览器会话已断开') ||
+        msg.content.includes('请重新点击登录') ||
+        msg.content.includes('模型未就绪')
+      )) {
+        thinking.value = false
+        stopSSE()
+        await loadModels()
+        ElMessage.warning('模型连接已断开，请重新登录')
+        window.dispatchEvent(new CustomEvent('open-manage-drawer', { detail: 'models' }))
+      }
     }
   }
   isProcessingQueue = false
